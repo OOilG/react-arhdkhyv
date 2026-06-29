@@ -4,6 +4,13 @@ import "./style.css";
 export default function App() {
   const canvasRef = useRef(null);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [allTimeBoard, setAllTimeBoard] = useState(() => {
+    try {
+      const saved = localStorage.getItem("aquarium_wins");
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) { return {}; }
+  });
+
   const [commentData] = useState([
     { id: "c1", user: "u/Fin", upvotes: 85, isQuestion: false },
     { id: "c2", user: "u/Chef", upvotes: 42, isQuestion: false },
@@ -13,165 +20,174 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("aquarium_wins", JSON.stringify(allTimeBoard));
+    } catch (e) {}
+  }, [allTimeBoard]);
+
+  useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return;
     const ctx = canvas.getContext("2d");
+    
+    const resizeCanvas = () => {
+      const parentWidth = canvas.parentElement.clientWidth;
+      canvas.width = Math.min(800, parentWidth);
+      canvas.height = canvas.width * (450 / 800); 
+    };
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
     const tankArea = canvas.width * canvas.height;
-    const minArea = tankArea * 0.0025, maxSpawnArea = tankArea * 0.0125, absoluteMaxArea = tankArea * 0.0200, leviathanArea = tankArea * 0.0500;
+    const minArea = tankArea * 0.0015, maxSpawnArea = tankArea * 0.008, absoluteMaxArea = tankArea * 0.015, leviathanArea = tankArea * 0.035, ancientArea = tankArea * 0.055;
+    let fishes = []; let bubbles = []; let roundOverRecorded = false;
+
+    // ⏱️ TIME-ANCHORED SEED GENERATION: Overrides random gaps to align layouts identically everywhere
+    const getSynchronizedClockMetric = (index) => {
+      const globalTimeBlock = Math.floor(Date.now() / 300000); 
+      return Math.abs(Math.sin(globalTimeBlock + index));
+    };
+
+    for (let i = 0; i < 35; i++) {
+      const seededSway = getSynchronizedClockMetric(i);
+      bubbles.push({ x: seededSway * canvas.width, y: ((i * 15) % canvas.height), r: (seededSway * 1.5) + 1, speed: (seededSway * 0.3) + 0.2, swaySeed: i });
+    }
 
     const updateBoard = (arr) => {
-      const list = [...arr].sort((a,b) => b.upvotes - a.upvotes).map(f => {
-        let t = f.isLeviathan ? "🚨 APEX BOSS" : f.isEaten ? "💀 FOOD" : f.upvotes >= 50 ? "👑 LORD" : "🐟 MINNOW";
-        return { user: f.user, upvotes: f.upvotes, title: t, dead: f.isEaten };
-      });
+      const list = [...arr].sort((a, b) => b.upvotes - a.upvotes).map((f) => ({
+        user: f.user, upvotes: f.upvotes, title: f.isAncient ? "🌌 MYTHIC KRAKEN" : f.isLeviathan ? "🚨 APEX ALPHA" : f.upvotes >= 50 ? "👑 LORD" : "🐟 MINNOW", dead: f.isEaten
+      }));
       setLeaderboard(list);
     };
 
-    const drawLoop = setInterval(() => {
-      const serverTime = Date.now(); // Centralized universal engine anchor clock
-      
-      // Clean background render
-      ctx.fillStyle = '#0284c7'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#4ade80'; ctx.fillRect(40, canvas.height - 60, 15, 60); ctx.fillRect(canvas.width - 60, canvas.height - 70, 15, 70);
-
-      // 🫧 Synchronized background water bubble rendering pass
-      ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
-      for (let i = 0; i < 20; i++) {
-        const bubbleSeedX = (i * 47) % canvas.width;
-        const bubbleBaseSpeed = 0.05 + (i % 3) * 0.03;
-        const bubbleTimeY = (serverTime * bubbleBaseSpeed) % (canvas.height + 20);
-        const bubbleY = canvas.height + 10 - bubbleTimeY;
-        const bubbleSwayX = Math.sin((serverTime / 400) + i) * 4;
+    const generateEcosystem = () => {
+      roundOverRecorded = false;
+      fishes = commentData.map((c, index) => {
+        const area = Math.max(minArea, Math.min(minArea + c.upvotes * 25, maxSpawnArea)), rx = Math.sqrt(area / (Math.PI / 1.6));
+        const clockSeed = getSynchronizedClockMetric(index);
         
-        ctx.beginPath();
-        ctx.arc(bubbleSeedX + bubbleSwayX, bubbleY, 1.5 + (i % 2), 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // ⏳ Synchronized Event Evaluation Windows
-      // Checks if the current 10-minute slot of the clock triggers a global Leviathan spawn
-      const currentMinuteBlock = Math.floor(serverTime / 60000) % 10;
-      const isBossTime = currentMinuteBlock === 0 || currentMinuteBlock === 1; // Spawns for a uniform window
-
-      // Build active fish arrays deterministically so positions map identically on every device
-      let fishes = commentData.map((c, index) => {
-        const area = Math.max(minArea, Math.min(minArea + (c.upvotes * 10), maxSpawnArea));
-        const rx = Math.sqrt(area / (Math.PI / 1.6));
-        
-        // Centralized movement math pathways driven by timestamp loops instead of random seeds
-        const timeline = serverTime * 0.001;
-        const loopWidth = canvas.width - (rx * 2) - 40;
-        const loopHeight = canvas.height - (rx * 2) - 40;
-        
-        const speedMultiplierX = 0.5 + (index * 0.15);
-        const speedMultiplierY = 0.3 + (index * 0.1);
-        
-        const rawX = (rx + 20) + (Math.abs((timeline * speedMultiplierX * 40) % (loopWidth * 2) - loopWidth));
-        const rawY = (rx + 20) + (Math.abs((timeline * speedMultiplierY * 30) % (loopHeight * 2) - loopHeight));
-
-        // Determine orientation headers dynamically from position velocities
-        const prevTimeline = (serverTime - 16) * 0.001;
-        const prevX = (rx + 20) + (Math.abs((prevTimeline * speedMultiplierX * 40) % (loopWidth * 2) - loopWidth));
-        const currentDx = rawX - prevX;
-
+        // Locked absolute positioning matrix coordinate tracks
+        const fixedSeedX = (index * (canvas.width / 6)) + 60;
+        const fixedSeedY = ((clockSeed * (canvas.height - 100)) + 50);
         return {
-          id: c.id, user: c.user, upvotes: c.upvotes, x: rawX, y: rawY, dx: currentDx,
-          rx: rx, ry: rx / 1.6, color: c.isQuestion ? '#38bdf8' : '#fbbf24', isEaten: false, isLeviathan: false
+          id: c.id, user: c.user, upvotes: c.upvotes, x: fixedSeedX, y: fixedSeedY,
+          baseDx: index % 2 === 0 ? 1.4 : -1.4, dy: index % 3 === 0 ? 0.6 : -0.6,
+          rx: rx, ry: rx / 1.6, targetRx: rx, targetRy: rx / 1.6, color: c.isQuestion ? "#00f0ff" : "#ffb700",
+          isEaten: false, isLeviathan: false, isAncient: false, spawnTime: Math.floor(Date.now() / 300000) * 300000, tailSeed: index
         };
       });
 
-      // Inject deterministic Boss attributes if clock coordinates line up universally
-      if (isBossTime) {
+      // Synchronized Alpha spawning bound directly to absolute database wall clock intervals
+      const timeMinutes = new Date().getMinutes();
+      if (timeMinutes % 10 === 0 || timeMinutes % 10 === 1) {
         const leviathanRx = Math.sqrt(leviathanArea / (Math.PI / 1.6));
-        const bossTimeline = serverTime * 0.0006;
-        const bossWidth = canvas.width - (leviathanRx * 2) - 60;
-        const bossX = (leviathanRx + 30) + (Math.abs((bossTimeline * 25) % (bossWidth * 2) - bossWidth));
-        const bossY = canvas.height / 2 + Math.sin(serverTime / 1200) * 20;
-        
-        const prevBossTimeline = (serverTime - 16) * 0.0006;
-        const prevBossX = (leviathanRx + 30) + (Math.abs((prevBossTimeline * 25) % (bossWidth * 2) - bossWidth));
-        
-        fishes.push({
-          id: "lev_global", user: "🐋 LEVIATHAN", upvotes: 999, x: bossX, y: bossY, dx: bossX - prevBossX,
-          rx: leviathanRx, ry: leviathanRx / 1.6, color: "#ef4444", isEaten: false, isLeviathan: true
-        });
+        fishes.push({ id: "lev_sync", user: "🐋 LEVIATHAN", upvotes: 999, x: canvas.width / 2, y: canvas.height / 2, baseDx: 0.6, dy: 0.3, rx: leviathanRx, ry: leviathanRx / 1.6, targetRx: leviathanRx, targetRy: leviathanRx / 1.6, color: "#ff0055", isEaten: false, isLeviathan: true, isAncient: false, spawnTime: Date.now(), tailSeed: 50 });
+      }
+      updateBoard(fishes);
+    };
+
+    generateEcosystem();
+    const resetIntervalId = setInterval(generateEcosystem, 15000); // Poll server updates every 15s
+
+    const mutationIntervalId = setInterval(() => {
+      let mutated = false; const isLevAlive = fishes.some((f) => !f.isEaten && f.isLeviathan && !f.isAncient);
+      fishes = fishes.map((f, i) => {
+        if (f.isEaten) return f;
+        if (isLevAlive && !f.isLeviathan && i === 0) {
+          const ancientRx = Math.sqrt(ancientArea / (Math.PI / 1.6)); mutated = true;
+          return { ...f, user: "👑 KRAKEN", targetRx: ancientRx, targetRy: ancientRx / 1.6, color: "#b600ff", isLeviathan: true, isAncient: true, spawnTime: Date.now() };
+        }
+        return f;
+      });
+      if (mutated) updateBoard(fishes);
+    }, 5000);
+
+    const triggerPredatorCycle = () => {
+      fishes = fishes.map((f) => (f.isAncient && Date.now() - f.spawnTime > 180000 ? { ...f, isEaten: true } : f));
+      const active = fishes.filter((f) => !f.isEaten);
+
+      if (active.length === 1 && !roundOverRecorded) {
+        const winner = active.user; roundOverRecorded = true;
+        setAllTimeBoard((prev) => ({ ...prev, [winner]: (prev[winner] || 0) + 1 }));
       }
 
-      // 🚨 REAL-TIME GLOBAL NOSE-CONE EXTRACTION METHOD
-      // Runs matching vector intersection routines driven by server dimensions
-      fishes.forEach((predator, pIdx) => {
-        if (predator.isEaten) return;
-        
-        fishes.forEach((prey, prIdx) => {
-          if (prey.isEaten || pIdx === prIdx || prey.rx >= predator.rx) return;
-          
-          const velLen = Math.hypot(predator.dx, 0.1); // Avoid zero dividing blocks
-          const noseX = predator.x + ((predator.dx / velLen) * predator.rx);
-          const noseY = predator.y;
-          
-          const distToNose = Math.hypot(prey.x - noseX, prey.y - noseY);
-          if (distToNose < prey.rx + 6) {
-            let angleToPrey = Math.atan2(prey.y - predator.y, prey.x - predator.x);
-            let headingAngle = Math.atan2(0, predator.dx);
-            let diff = angleToPrey - headingAngle;
-            
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            
-            // If inside the forward nose field cone, register a visual skip
-            if (Math.abs(diff) <= 0.707) {
-              fishes[prIdx].isEaten = true;
+      if (active.length < 2) return;
+      const sorted = [...active].sort((a, b) => b.rx - a.rx), predators = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * 0.15)));
+
+      predators.forEach((predator) => {
+        if (predator.isEaten) return; if (Math.PI * predator.targetRx * predator.targetRy >= absoluteMaxArea && !predator.isLeviathan) return;
+        const preyOptions = sorted.filter((v) => !v.isEaten && v.id !== predator.id && v.rx < predator.rx);
+
+        preyOptions.forEach((prey) => {
+          const centerDist = Math.hypot(prey.x - predator.x, prey.y - predator.y); if (centerDist >= predator.rx + prey.rx) return;
+          const relativeX = prey.x - predator.x; const relativeY = prey.y - predator.y;
+          const headingLen = Math.hypot(predator.baseDx, predator.dy);
+          const dotProductForward = (relativeX * (predator.baseDx / headingLen)) + (relativeY * (predator.dy / headingLen));
+
+          if (dotProductForward > 0) {
+            const pIdx = fishes.findIndex((f) => f.id === prey.id); if (pIdx !== -1) fishes[pIdx].isEaten = true;
+            const predIdx = fishes.findIndex((f) => f.id === predator.id);
+            if (predIdx !== -1 && !fishes[predIdx].isLeviathan) {
+              fishes[predIdx].targetRx += 3.5; fishes[predIdx].targetRy += 2.2;
+              if (Math.PI * fishes[predIdx].targetRx * fishes[predIdx].targetRy > absoluteMaxArea) {
+                const capRx = Math.sqrt(absoluteMaxArea / (Math.PI / 1.6)); fishes[predIdx].targetRx = capRx; fishes[predIdx].targetRy = capRx / 1.6;
+              }
             }
           }
         });
       });
+      updateBoard(fishes);
+    };
 
-      // Render the current synchronized frame profiles
-      fishes.forEach(f => {
-        if (f.isEaten) return;
-        ctx.fillStyle = f.color; ctx.beginPath(); ctx.ellipse(f.x, f.y, f.rx, f.ry, 0, 0, 2 * Math.PI); ctx.fill();
-        
-        ctx.beginPath(); ctx.moveTo(f.x - (f.dx > 0 ? f.rx : -f.rx), f.y);
-        ctx.lineTo(f.x - (f.dx > 0 ? f.rx * 1.4 : -f.rx * 1.4), f.y - f.ry / 1.5);
-        ctx.lineTo(f.x - (f.dx > 0 ? f.rx * 1.4 : -f.rx * 1.4), f.y + f.ry / 1.5);
-        ctx.closePath(); ctx.fill();
-        
-        ctx.fillStyle = "#ffffff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText(f.user, f.x, f.y - (f.ry + 6));
+    const predatorIntervalId = setInterval(triggerPredatorCycle, 3000);
+
+    const render = () => {
+      ctx.fillStyle = "#050814"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(0, 240, 255, 0.12)";
+      bubbles.forEach((b) => {
+        b.y -= b.speed; b.swaySeed += 0.02; b.x += Math.cos(b.swaySeed) * 0.2;
+        if (b.y < -10) { b.y = canvas.height + 10; b.x = Math.random() * canvas.width; }
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
       });
 
-      updateBoard(fishes);
-    }, 16);
+      ctx.fillStyle = "#00ff66"; ctx.fillRect(60, canvas.height - 80, 10, 80); ctx.fillRect(canvas.width - 80, canvas.height - 100, 10, 100);
+      const leviathanTarget = fishes.find((f) => !f.isEaten && f.isLeviathan && !f.isAncient);
 
-    return () => clearInterval(drawLoop);
+      fishes.forEach(f => {
+        if (f.isEaten) return;
+        f.rx += (f.targetRx - f.rx) * 0.05; f.ry += (f.targetRy - f.ry) * 0.05;
+        let scaleFactor = Math.max(0.4, 25 / f.rx); let currentDx = f.baseDx * scaleFactor; let currentDy = f.dy * scaleFactor;
+
+        if (f.isAncient && leviathanTarget) {
+          const cycleTime = (Date.now() - f.spawnTime) % 6000;
+          if (cycleTime < 2000) {
+            const angle = Math.atan2(leviathanTarget.y - f.y, leviathanTarget.x - f.x);
+            currentDx = currentDx * 0.94 + Math.cos(angle) * 2.2 * 0.06; currentDy = currentDy * 0.94 + Math.sin(angle) * 1.4 * 0.06;
+          }
+        }
+
+        f.x += currentDx; f.y += currentDy;
+        if (f.x - f.rx < 0 || f.x + f.rx > canvas.width) f.baseDx *= -1;
+        if (f.y - f.ry < 0 || f.y + f.ry > canvas.height) f.dy *= -1;
+
+        ctx.fillStyle = f.color; ctx.shadowBlur = 15; ctx.shadowColor = f.color;
+        ctx.beginPath(); ctx.ellipse(f.x, f.y, f.rx, f.ry, 0, 0, 2 * Math.PI); ctx.fill();
+
+        f.tailSeed += 0.15; const tailWag = Math.sin(f.tailSeed) * 0.4; const headingDir = currentDx > 0 ? -1 : 1;
+        ctx.beginPath(); ctx.moveTo(f.x + (currentDx > 0 ? -f.rx : f.rx), f.y);
+        ctx.lineTo(f.x + headingDir * f.rx * 1.4, f.y - f.ry / 1.5 + tailWag * f.ry); ctx.lineTo(f.x + headingDir * f.rx * 1.4, f.y + f.ry / 1.5 + tailWag * f.ry);
+        ctx.closePath(); ctx.fill(); ctx.shadowBlur = 0;
+
+        ctx.fillStyle = "rgba(255, 255, 255, 0.95)"; ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.fillText(f.user, f.x, f.y - (f.ry + 6));
+      });
+      requestAnimationFrame(render);
+    };
+
+    const animId = requestAnimationFrame(render);
+    return () => {
+      cancelAnimationFrame(animId); window.removeEventListener("resize", resizeCanvas);
+      clearInterval(predatorIntervalId); clearInterval(resetIntervalId); clearInterval(mutationIntervalId);
+      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+    };
   }, [commentData]);
 
-  return (
-    <div style={{ padding: '12px', fontFamily: 'sans-serif', background: '#0f172a', color: '#fff', borderRadius: '16px', width: '100%', maxWidth: '380px', boxSizing: 'border-box', margin: '10px auto', border: '1px solid #1e293b' }}>
-      <h4 style={{ textAlign: 'center', margin: '0 0 10px 0', letterSpacing: '0.5px' }}>🐋 REAL-TIME GLOBAL SIMULATOR</h4>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-        <canvas ref={canvasRef} width={340} height={220} style={{ border: '4px solid #f59e0b', borderRadius: '12px', background: '#0284c7', width: '100%', maxWidth: '340px', display: 'block' }} />
-        
-        <div style={{ width: '100%', background: '#1e293b', borderRadius: '12px', padding: '12px', boxSizing: 'border-box', border: '1px solid #334155', fontSize: '11px', textAlign: 'left', lineHeight: '1.4' }}>
-          <div style={{ color: '#00f0ff', fontWeight: '800', marginBottom: '6px' }}>📜 SERVER CONSOLE SYNCHRONIZATION KEY:</div>
-          <div>🟡 <strong>Gold Fish</strong>: Standard statement comments.</div>
-          <div>🔵 <strong>Blue Fish</strong>: Question thread tracking badges.</div>
-          <div>🔴 <strong>Red Boss</strong>: Alpha Leviathan beast. Spawns and tracks identically across all devices using synchronized server clock arrays.</div>
-          <hr style={{ border: 0, borderTop: '1px solid #334155', margin: '6px 0' }} />
-          <div>• Movement values are locked to universal timeline matrix ticks. Smaller fish are safely shielded unless they intersect directly inside the 45° vector cone expanding out from the predator's nose tip.</div>
-        </div>
-
-        <div style={{ width: '100%', background: '#1e293b', borderRadius: '12px', padding: '12px', boxSizing: 'border-box', border: '1px solid #334155' }}>
-          <div style={{ color: '#38bdf8', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', borderBottom: '1px solid #334155', paddingBottom: '4px', textAlign: 'left' }}>🏆 Live Global Survivors</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {leaderboard.map((item, idx) => (
-              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: item.dead ? '#0f172a50' : '#0f172a', padding: '8px 10px', borderRadius: '6px', opacity: item.dead ? 0.25 : 1, border: '1px solid #1e293b' }}>
-                <span style={{ fontSize: '12px', color: item.dead ? '#64748b' : '#f8fafc' }}>{item.user} <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '4px' }}>({item.title})</span></span>
-                <span style={{ fontSize: '11px', fontWeight: 'bold', color: item.dead ? '#475569' : '#fbbf24' }}>▲ {item.upvotes}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+  return React.createElement("div", { ref: containerRef, style: { padding: '24px', fontFamily: 'sans-serif', background: 'radial-gradient(circle at top, #111827, #030712)', color: '#fff', minHeight: '100vh', boxSizing: 'border-box' } },
